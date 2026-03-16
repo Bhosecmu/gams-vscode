@@ -2,7 +2,7 @@
   "name": "gams-vscode",
   "displayName": "GAMS",
   "description": "GAMS language support: syntax highlighting, GDX/ref viewer, run integration, and error diagnostics",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -43,18 +43,65 @@
         "priority": "default"
       }
     ],
+    "commands": [
+      {
+        "command": "gams.run",
+        "title": "Run GAMS File",
+        "category": "GAMS",
+        "icon": "$(play)"
+      },
+      {
+        "command": "gams.stop",
+        "title": "Stop GAMS Run",
+        "category": "GAMS",
+        "icon": "$(stop)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "gams.run",
+        "key": "ctrl+f5",
+        "when": "editorLangId == gams && !gams.running"
+      },
+      {
+        "command": "gams.stop",
+        "key": "shift+f5",
+        "when": "editorLangId == gams && gams.running"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "gams.run",
+          "when": "editorLangId == gams && !gams.running",
+          "group": "navigation"
+        },
+        {
+          "command": "gams.stop",
+          "when": "editorLangId == gams && gams.running",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "gams.run",
+          "when": "editorLangId == gams",
+          "group": "gams@1"
+        }
+      ]
+    },
     "configuration": {
       "title": "GAMS",
       "properties": {
         "gams.executablePath": {
           "type": "string",
           "default": "",
-          "description": "Path to the GAMS executable (e.g. C:\\GAMS\\47\\gams.exe). Leave empty to use PATH."
+          "description": "Path to the GAMS executable (e.g. C:\\GAMS\\47\\gams.exe). Leave empty to auto-detect."
         },
         "gams.defaultScratchDir": {
           "type": "string",
           "default": "",
-          "description": "Working directory for GAMS runs. Defaults to the workspace folder."
+          "description": "Working directory for GAMS runs. Defaults to the directory of the active file."
         }
       }
     }
