@@ -1,0 +1,209 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "GAMS",
+  "scopeName": "source.gams",
+  "fileTypes": ["gms", "gams"],
+  "patterns": [
+    { "include": "#block-comment" },
+    { "include": "#line-comment" },
+    { "include": "#endline-comment" },
+    { "include": "#dollar-directives" },
+    { "include": "#compile-attrib" },
+    { "include": "#strings" },
+    { "include": "#variable-type-modifiers" },
+    { "include": "#declaration-keywords" },
+    { "include": "#control-keywords" },
+    { "include": "#solve-keywords" },
+    { "include": "#model-types" },
+    { "include": "#builtin-functions" },
+    { "include": "#constants" },
+    { "include": "#operators" },
+    { "include": "#system-attrib" },
+    { "include": "#numbers" }
+  ],
+  "repository": {
+
+    "block-comment": {
+      "name": "comment.block.gams",
+      "begin": "(?i)^\\$ontext\\b",
+      "end": "(?i)^\\$offtext\\b",
+      "beginCaptures": { "0": { "name": "keyword.control.dollar.gams" } },
+      "endCaptures":   { "0": { "name": "keyword.control.dollar.gams" } }
+    },
+
+    "line-comment": {
+      "name": "comment.line.gams",
+      "match": "^\\*.*$"
+    },
+
+    "endline-comment": {
+      "comment": "!! is the Studio default eolcom; // is the common $eolcom // alternative. Neither is a GAMS operator so both are safe to treat as comments.",
+      "name": "comment.line.endline.gams",
+      "match": "(?:!!|//).*$"
+    },
+
+    "dollar-directives": {
+      "patterns": [
+        {
+          "comment": "Block-opening DCOs (ontext handled separately as block-comment)",
+          "name": "keyword.control.dollar.gams",
+          "match": "(?i)^\\$(onecho|oneolcom|oninline|onglobal|onlocal|onmulti|onrecurse|onsymlist|onsymxref|onuel|onundf|oncomments|oncr|ondollar|onlisting|onmargin|onputfile|oneps|onempty|ondotl|onsymxref|offecho|offeolcom|offinline|offglobal|offlocal|offmulti|offrecurse|offsymlist|offsymxref|offlisting|offundf|offcomments|offcr|offdollar|offmargin|offputfile|offeps|offempty|offdotl|offuel|offonsymxref|clearerror|offinlinecom)\\b"
+        },
+        {
+          "comment": "Embedded code block DCOs",
+          "name": "keyword.control.dollar.embedded.gams",
+          "match": "(?i)^\\$(onembeddedcode|offembeddedcode|onexternalinput|offexternalinput|onexternaloutput|offexternaloutput|onembedded|offembedded)(?:\\.[a-zA-Z0-9_]+)?\\b"
+        },
+        {
+          "comment": "Conditional DCOs",
+          "name": "keyword.control.dollar.gams",
+          "match": "(?i)^\\$(ifthenE|ifthenI|ifthen|iftheni|ifthenE|elseifI|elseifE|elseif|elseifi|else|elsei|endif|if(?!then)|ifi|ifI)\\b"
+        },
+        {
+          "comment": "Flow DCOs: goto/label",
+          "name": "keyword.control.dollar.gams",
+          "match": "(?i)^\\$(goto|label)[ \\t]+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "2": { "name": "entity.name.label.gams" }
+          }
+        },
+        {
+          "comment": "Include/call DCOs — highlight filename as string",
+          "name": "meta.preprocessor.include.gams",
+          "match": "(?i)^(\\$(?:batinclude|libinclude|sysinclude|include|call|funclibin|funclibout))([ \\t]+.*)?$",
+          "captures": {
+            "1": { "name": "keyword.control.dollar.gams" },
+            "2": { "name": "string.unquoted.gams" }
+          }
+        },
+        {
+          "comment": "Set/eval DCOs",
+          "name": "meta.preprocessor.set.gams",
+          "match": "(?i)^(\\$(?:setglobal|setlocal|setargs|setenv|set|evalglobal|evallocal|eval|gdxin|gdxload|gdxloadall|gdxout))([ \\t]+.*)?$",
+          "captures": {
+            "1": { "name": "keyword.control.dollar.gams" },
+            "2": { "name": "variable.other.gams" }
+          }
+        },
+        {
+          "comment": "Other single-line DCOs",
+          "name": "keyword.control.dollar.gams",
+          "match": "(?i)^\\$(abort|exit|log|title|stitle|titleq|stitleq|hidden|phantom|remark|show|protect|purge|shift|error|drop|expose|clear|dumpopts|dumpparms|eolcom|inlinecom|maxcol|mincol|use205|use225|use999|version|offorder|onorder|offuelxref|onuelxref|offsymxref|onsymxref|offsymlist|onsymlist|offdigit|ondigit|offtext)\\b"
+        }
+      ]
+    },
+
+    "compile-attrib": {
+      "comment": "Compile-time attributes: %system.attr% or %uservar%",
+      "name": "meta.preprocessor.attrib.gams",
+      "match": "%[a-zA-Z_][a-zA-Z0-9_.]*%",
+      "captures": {
+        "0": { "name": "support.variable.gams" }
+      }
+    },
+
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.gams",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            { "name": "constant.character.escape.gams", "match": "''" }
+          ]
+        },
+        {
+          "name": "string.quoted.double.gams",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.gams", "match": "\"\"" }
+          ]
+        }
+      ]
+    },
+
+    "variable-type-modifiers": {
+      "comment": "Variable type qualifiers that precede 'Variable/Variables'",
+      "name": "storage.modifier.gams",
+      "match": "(?i)\\b(positive|negative|binary|integer|free|sos1|sos2)(?=\\s+variables?\\b)"
+    },
+
+    "declaration-keywords": {
+      "comment": "GAMS declaration section keywords",
+      "name": "keyword.declaration.gams",
+      "match": "(?i)\\b(sets?|parameters?|scalars?|variables?|equations?|table|models?|alias|acronyms?|files?|singleton\\s+sets?)\\b"
+    },
+
+    "control-keywords": {
+      "comment": "Reserved GAMS control words",
+      "name": "keyword.control.gams",
+      "match": "(?i)\\b(solve|option|options|display|abort|execute|executetool|put|putpage|puttl|loop|if|else|elseif|endif|while|for|break|continue|return|abort\\.noerror)\\b"
+    },
+
+    "solve-keywords": {
+      "comment": "Keywords valid inside a solve statement",
+      "name": "keyword.operator.solve.gams",
+      "match": "(?i)\\b(using|minimizing|maximizing|satisfying|subject\\s+to|max|min)\\b"
+    },
+
+    "model-types": {
+      "comment": "GAMS model type names",
+      "name": "support.type.model.gams",
+      "match": "(?i)\\b(lp|nlp|mip|minlp|rmip|rminlp|qcp|miqcp|rmiqcp|dnlp|cns|mcp|mpec|rmpec|emp)\\b"
+    },
+
+    "builtin-functions": {
+      "comment": "GAMS built-in intrinsic functions",
+      "name": "support.function.gams",
+      "match": "(?i)\\b(abs|arccos|arcsin|arctan|arctan2|beta|betareg|binomial|ceil|centropy|cos|cospower|cpower|cv|diag|div|div0|eDist|entropy|errorf|exec|exp|fact|floor|frac|gamma|gammareg|gauss|hypot|jdate|jstart|jnow|jtime|jtod|log|log10|log2|logbeta|loggamma|mapval|max|min|mod|ncpCM|ncpF|ncpVUpow|ncpVUsin|normal|pi|poly|power|randBinomial|randLinear|randTriangle|rho|round|rpower|sigmoid|sign|sin|sinpower|sleep|sqr|sqrt|sum|prod|smax|smin|tan|tanh|trunc|uniform|uniformInt|card|ord|sameas)\\b"
+    },
+
+    "constants": {
+      "comment": "GAMS built-in constants and special values",
+      "name": "constant.language.gams",
+      "match": "(?i)\\b(yes|no|true|false|inf|\\+inf|na|eps|undf|zero|one|minf|pinf)\\b"
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "comment": "Equation sense / relational operators",
+          "name": "keyword.operator.equation.gams",
+          "match": "=e=|=l=|=g=|=n=|=x=|=c=|=b="
+        },
+        {
+          "comment": "Arithmetic and assignment operators",
+          "name": "keyword.operator.gams",
+          "match": "\\*\\*|[+\\-*/=<>]|\\.\\."
+        },
+        {
+          "comment": "Set membership/relation operators",
+          "name": "keyword.operator.set.gams",
+          "match": "(?i)\\b(in|not\\s+in|and|or|not|xor|imp|eqv)\\b"
+        }
+      ]
+    },
+
+    "system-attrib": {
+      "comment": "system.* runtime attributes (e.g. system.lp, system.gamsRelease)",
+      "name": "support.variable.language.gams",
+      "match": "(?i)\\bsystem\\.[a-zA-Z][a-zA-Z0-9_]*\\b"
+    },
+
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "Scientific notation",
+          "name": "constant.numeric.gams",
+          "match": "\\b[0-9]+(?:\\.[0-9]+)?[eE][+\\-]?[0-9]+\\b"
+        },
+        {
+          "comment": "Decimal number",
+          "name": "constant.numeric.gams",
+          "match": "\\b[0-9]+(?:\\.[0-9]+)?\\b"
+        }
+      ]
+    }
+  }
+}

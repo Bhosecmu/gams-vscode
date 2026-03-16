@@ -1,0 +1,76 @@
+{
+  "name": "gams-vscode",
+  "displayName": "GAMS",
+  "description": "GAMS language support: syntax highlighting, GDX/ref viewer, run integration, and error diagnostics",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "gams",
+        "aliases": ["GAMS", "gams"],
+        "extensions": [".gms", ".gams"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gams",
+        "scopeName": "source.gams",
+        "path": "./syntaxes/gams.tmLanguage.json"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "gams.gdxViewer",
+        "displayName": "GDX Viewer",
+        "selector": [{ "filenamePattern": "*.gdx" }],
+        "priority": "default"
+      },
+      {
+        "viewType": "gams.refViewer",
+        "displayName": "GAMS Reference Viewer",
+        "selector": [{ "filenamePattern": "*.ref" }],
+        "priority": "default"
+      }
+    ],
+    "configuration": {
+      "title": "GAMS",
+      "properties": {
+        "gams.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the GAMS executable (e.g. C:\\GAMS\\47\\gams.exe). Leave empty to use PATH."
+        },
+        "gams.defaultScratchDir": {
+          "type": "string",
+          "default": "",
+          "description": "Working directory for GAMS runs. Defaults to the workspace folder."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0"
+  }
+}
