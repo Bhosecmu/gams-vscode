@@ -12,6 +12,7 @@ import sys
 import json
 import math
 import os
+import numpy as np
 
 def find_gams_sysdir() -> str | None:
     """Return the GAMS system directory, or None if not found."""
@@ -37,13 +38,17 @@ def sanitize(value):
       4e300  = -Inf    (minus infinity)
       5e300  = Eps     (epsilon / essentially zero)
     """
-    if isinstance(value, float):
-        if value == 1e300:  return "Undef"
-        if value == 2e300:  return "NA"
-        if value == 3e300:  return "Inf"
-        if value == 4e300:  return "-Inf"
-        if value == 5e300:  return "Eps"
-        if math.isnan(value): return "NA"   # fallback for actual NaN
+    # gams.transfer may return numpy.float64, not Python float — check both.
+    # Only called on paginated slices (≤500 rows) so per-cell cost is negligible.
+    if isinstance(value, (float, np.floating)):
+        fv = float(value)
+        if fv == 1e300:    return "Undef"
+        if fv == 2e300:    return "NA"
+        if fv == 3e300:    return "Inf"
+        if fv == 4e300:    return "-Inf"
+        if fv == 5e300:    return "Eps"
+        if math.isnan(fv): return "NA"
+        if math.isinf(fv): return "Inf" if fv > 0 else "-Inf"
     return value
 
 
