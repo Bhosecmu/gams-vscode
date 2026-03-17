@@ -28,12 +28,22 @@ def find_gams_sysdir() -> str | None:
 
 
 def sanitize(value):
-    """Convert non-JSON-serialisable floats to strings."""
+    """Map GAMS special values to their display labels.
+
+    gams.transfer returns these as specific float magnitudes:
+      1e300  = UNDEF   (undefined)
+      2e300  = NA      (not available)
+      3e300  = +Inf    (plus infinity)
+      4e300  = -Inf    (minus infinity)
+      5e300  = Eps     (epsilon / essentially zero)
+    """
     if isinstance(value, float):
-        if math.isinf(value):
-            return "Inf" if value > 0 else "-Inf"
-        if math.isnan(value):
-            return "NA"
+        if value == 1e300:  return "Undef"
+        if value == 2e300:  return "NA"
+        if value == 3e300:  return "Inf"
+        if value == 4e300:  return "-Inf"
+        if value == 5e300:  return "Eps"
+        if math.isnan(value): return "NA"   # fallback for actual NaN
     return value
 
 
