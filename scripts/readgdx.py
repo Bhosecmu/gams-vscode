@@ -10,9 +10,8 @@ Requires: gams-transfer  (pip install gams-transfer)
 """
 import sys
 import json
-import math
 import os
-import numpy as np
+
 
 def find_gams_sysdir() -> str | None:
     """Return the GAMS system directory, or None if not found."""
@@ -28,32 +27,39 @@ def find_gams_sysdir() -> str | None:
     return None
 
 
-def sanitize(value):
-    """Map GAMS special values to their display labels.
+def sanitize_dataframe(df, gt):
+    """Replace GAMS special float values with their string labels.
 
-    gams.transfer returns these as specific float magnitudes:
-      1e300  = UNDEF   (undefined)
-      2e300  = NA      (not available)
-      3e300  = +Inf    (plus infinity)
-      4e300  = -Inf    (minus infinity)
-      5e300  = Eps     (epsilon / essentially zero)
+    gams.transfer actual Python mappings (from gt.SpecialValues):
+      POSINF  →  float("inf")     detected by gt.SpecialValues.isPosInf
+      NEGINF  →  float("-inf")    detected by gt.SpecialValues.isNegInf
+      EPS     →  -0.0             detected by gt.SpecialValues.isEps
+      NA      →  special NaN      detected by gt.SpecialValues.isNA
+      UNDEF   →  float("nan")     detected by gt.SpecialValues.isUndef
+
+    Applied vectorially on the already-paginated slice so there is no
+    per-cell Python overhead regardless of the full GDX size.
     """
-    # gams.transfer may return numpy.float64, not Python float — check both.
-    # Only called on paginated slices (≤500 rows) so per-cell cost is negligible.
-    if isinstance(value, (float, np.floating)):
-        fv = float(value)
-        if fv == 1e300:    return "Undef"
-        if fv == 2e300:    return "NA"
-        if fv == 3e300:    return "Inf"
-        if fv == 4e300:    return "-Inf"
-        if fv == 5e300:    return "Eps"
-        if math.isnan(fv): return "NA"
-        if math.isinf(fv): return "Inf" if fv > 0 else "-Inf"
-    return value
+    import numpy as np
 
+    df = df.copy()
+    float_cols = df.select_dtypes(include=["float"]).columns
 
-def sanitize_record(rec: dict) -> dict:
-    return {k: sanitize(v) for k, v in rec.items()}
+    for col in float_cols:
+        arr = df[col].to_numpy()
+        result = arr.astype(object)   # object array accepts mixed str/float
+
+        # NA must come before isUndef: both are NaN bit patterns but
+        # NA uses a distinct payload that only isNA detects correctly.
+        result[gt.SpecialValues.isNA(arr)]     = "NA"
+        result[gt.SpecialValues.isUndef(arr)]  = "Undef"
+        result[gt.SpecialValues.isPosInf(arr)] = "Inf"
+        result[gt.SpecialValues.isNegInf(arr)] = "-Inf"
+        result[gt.SpecialValues.isEps(arr)]    = "Eps"
+
+        df[col] = result
+
+    return df
 
 
 class GdxReader:
@@ -68,9 +74,11 @@ class GdxReader:
             )
         kwargs = {"system_directory": sysdir} if sysdir else {}
         self.container = gt.Container(gdx_path, **kwargs)
+        self.gt = gt
 
     def index(self) -> dict:
         """Return a dict mapping category → list of symbol names + descriptions."""
+        gt = self.gt
         categories: dict[str, list[dict]] = {
             "Sets": [],
             "Parameters": [],
@@ -78,14 +86,12 @@ class GdxReader:
             "Equations": [],
             "Aliases": [],
         }
-        import gams.transfer as gt  # type: ignore
         for name, sym in self.container.data.items():
             entry = {"name": name, "description": getattr(sym, "description", "") or ""}
-            if isinstance(sym, gt.Set):
-                if isinstance(sym, gt.Alias):
-                    categories["Aliases"].append(entry)
-                else:
-                    categories["Sets"].append(entry)
+            if isinstance(sym, gt.Alias):
+                categories["Aliases"].append(entry)
+            elif isinstance(sym, gt.Set):
+                categories["Sets"].append(entry)
             elif isinstance(sym, gt.Parameter):
                 categories["Parameters"].append(entry)
             elif isinstance(sym, gt.Variable):
@@ -96,33 +102,32 @@ class GdxReader:
 
     def symbol_data(self, name: str, page: int, rows: int) -> dict:
         """Return paginated records for a symbol."""
+        gt  = self.gt
         sym = self.container[name]
         description = getattr(sym, "description", "") or ""
+
         try:
             df = sym.records
         except Exception:
             df = None
 
-        if df is None or (hasattr(df, "__len__") and len(df) == 0):
+        if df is None or len(df) == 0:
             return {"name": name, "description": description,
                     "columns": [], "records": [], "total": 0, "page": page, "rows": rows}
 
-        total = len(df)
-        start = (page - 1) * rows
-        end = min(start + rows, total)
-        slice_df = df.iloc[start:end]
-
-        columns = list(df.columns)
-        records = [sanitize_record(r) for r in slice_df.to_dict(orient="records")]
+        total   = len(df)
+        start   = (page - 1) * rows
+        end     = min(start + rows, total)
+        slice_df = sanitize_dataframe(df.iloc[start:end], gt)
 
         return {
-            "name": name,
+            "name":        name,
             "description": description,
-            "columns": columns,
-            "records": records,
-            "total": total,
-            "page": page,
-            "rows": rows,
+            "columns":     list(df.columns),
+            "records":     slice_df.to_dict(orient="records"),
+            "total":       total,
+            "page":        page,
+            "rows":        rows,
         }
 
 
@@ -131,7 +136,7 @@ def main():
         print(json.dumps({"error": "Usage: readgdx.py <file.gdx> [--interactive]"}))
         sys.exit(1)
 
-    gdx_path = sys.argv[1]
+    gdx_path    = sys.argv[1]
     interactive = "--interactive" in sys.argv
 
     try:
@@ -150,7 +155,7 @@ def main():
         if not line:
             continue
         try:
-            req = json.loads(line)
+            req  = json.loads(line)
             name = req["symbolName"]
             page = int(req.get("page", 1))
             rows = int(req.get("rows", 100))
