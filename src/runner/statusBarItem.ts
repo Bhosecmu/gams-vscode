@@ -23,9 +23,9 @@ export class GamsStatusBarItem {
         switch (state) {
             case 'idle':
                 this.item.text        = '$(play) Run GAMS';
-                this.item.tooltip     = 'Run current GAMS file (Ctrl+F5)';
+                this.item.tooltip     = 'Run (Ctrl+F5)  •  Run with args… (Ctrl+Shift+F5)';
                 this.item.color       = undefined;
-                this.item.command     = 'gams.run';
+                this.item.command     = 'gams.runWithArgs';
                 break;
 
             case 'running':

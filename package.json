@@ -51,6 +51,12 @@
         "icon": "$(play)"
       },
       {
+        "command": "gams.runWithArgs",
+        "title": "Run GAMS File with Arguments…",
+        "category": "GAMS",
+        "icon": "$(play)"
+      },
+      {
         "command": "gams.stop",
         "title": "Stop GAMS Run",
         "category": "GAMS",
@@ -64,6 +70,11 @@
         "when": "editorLangId == gams && !gams.running"
       },
       {
+        "command": "gams.runWithArgs",
+        "key": "ctrl+shift+f5",
+        "when": "editorLangId == gams && !gams.running"
+      },
+      {
         "command": "gams.stop",
         "key": "shift+f5",
         "when": "editorLangId == gams && gams.running"
@@ -74,7 +85,12 @@
         {
           "command": "gams.run",
           "when": "editorLangId == gams && !gams.running",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "gams.runWithArgs",
+          "when": "editorLangId == gams && !gams.running",
+          "group": "navigation@2"
         },
         {
           "command": "gams.stop",
@@ -87,6 +103,11 @@
           "command": "gams.run",
           "when": "editorLangId == gams",
           "group": "gams@1"
+        },
+        {
+          "command": "gams.runWithArgs",
+          "when": "editorLangId == gams",
+          "group": "gams@2"
         }
       ]
     },

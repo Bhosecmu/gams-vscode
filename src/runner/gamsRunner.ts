@@ -82,7 +82,7 @@ export class GamsRunner {
 
     get isRunning(): boolean { return !!this.currentProc; }
 
-    async run(uri: vscode.Uri): Promise<void> {
+    async run(uri: vscode.Uri, extraArgs: string = ''): Promise<void> {
         if (this.currentProc) { return; }   // already running
 
         const gamsExe = await findGamsExecutable();
@@ -105,12 +105,14 @@ export class GamsRunner {
             'lo=3',                          // stream log to stdout
             `lf=${logFile}`,                  // also write .log file
             `curDir=${fileDir}`,              // working directory = file's directory
+            ...extraArgs.split(/\s+/).filter(Boolean),   // user-supplied key=value pairs
         ];
 
         this.channel.clear();
         this.channel.show(true);
         this.channel.appendLine(`GAMS: ${gamsExe}`);
         this.channel.appendLine(`File: ${filePath}`);
+        if (extraArgs) { this.channel.appendLine(`Args: ${extraArgs}`); }
         this.channel.appendLine('─'.repeat(60));
 
         this.onStateChange('running');

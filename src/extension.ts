@@ -3,6 +3,7 @@ import { GdxEditorProvider } from './gdxviewer/gdxEditorProvider';
 import { RefEditorProvider } from './gdxviewer/refEditorProvider';
 import { GamsRunner, RunResult } from './runner/gamsRunner';
 import { GamsStatusBarItem } from './runner/statusBarItem';
+import { pickArgs, getLastArgs, saveLastArgs } from './runner/argsManager';
 
 export function activate(context: vscode.ExtensionContext) {
 
@@ -30,33 +31,51 @@ export function activate(context: vscode.ExtensionContext) {
             statusBar.hide();
         }
     };
-
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(updateStatusBarVisibility)
     );
     updateStatusBarVisibility(vscode.window.activeTextEditor);
 
-    // gams.run — run the active GAMS file
+    // ── Helper: save file + run with given args ───────────────────────────────
+    async function runWith(uri: vscode.Uri, args: string) {
+        const doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
+        if (doc?.isDirty) { await doc.save(); }
+        saveLastArgs(context.workspaceState, uri.toString(), args);
+        await runner.run(uri, args);
+    }
+
+    // ── gams.run — run with last-used args (no prompt) ────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('gams.run', async () => {
             if (runner.isRunning) { return; }
-
             const editor = vscode.window.activeTextEditor;
             if (!editor || editor.document.languageId !== 'gams') {
                 vscode.window.showWarningMessage('Open a .gms file to run GAMS.');
                 return;
             }
-
-            // Save the file before running
-            if (editor.document.isDirty) {
-                await editor.document.save();
-            }
-
-            await runner.run(editor.document.uri);
+            const uri  = editor.document.uri;
+            const args = getLastArgs(context.workspaceState, uri.toString());
+            await runWith(uri, args);
         })
     );
 
-    // gams.stop — kill the running process
+    // ── gams.runWithArgs — always show argument picker first ──────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('gams.runWithArgs', async () => {
+            if (runner.isRunning) { return; }
+            const editor = vscode.window.activeTextEditor;
+            if (!editor || editor.document.languageId !== 'gams') {
+                vscode.window.showWarningMessage('Open a .gms file to run GAMS.');
+                return;
+            }
+            const uri  = editor.document.uri;
+            const args = await pickArgs(context.workspaceState, uri.toString());
+            if (args === undefined) { return; }   // user cancelled
+            await runWith(uri, args);
+        })
+    );
+
+    // ── gams.stop — kill running process ─────────────────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('gams.stop', () => {
             runner.stop();
