@@ -27,18 +27,12 @@ def find_gams_sysdir() -> str | None:
     return None
 
 
-def sanitize_dataframe(df, gt):
-    """Replace GAMS special float values with their string labels.
+def sanitize_dataframe(df):
+    """Minimal sanitization: only fix values that would break JSON serialization.
 
-    gams.transfer actual Python mappings (from gt.SpecialValues):
-      POSINF  →  float("inf")     detected by gt.SpecialValues.isPosInf
-      NEGINF  →  float("-inf")    detected by gt.SpecialValues.isNegInf
-      EPS     →  -0.0             detected by gt.SpecialValues.isEps
-      NA      →  special NaN      detected by gt.SpecialValues.isNA
-      UNDEF   →  float("nan")     detected by gt.SpecialValues.isUndef
-
-    Applied vectorially on the already-paginated slice so there is no
-    per-cell Python overhead regardless of the full GDX size.
+    TODO: proper GAMS special value display (Inf/-Inf/Eps/NA/Undef) to be
+    revisited once the exact gams.transfer representation on this system
+    is confirmed (raw GMS_SV floats vs Python-mapped float/NaN/etc.).
     """
     import numpy as np
 
@@ -47,16 +41,12 @@ def sanitize_dataframe(df, gt):
 
     for col in float_cols:
         arr = df[col].to_numpy()
-        result = arr.astype(object)   # object array accepts mixed str/float
-
-        # NA must come before isUndef: both are NaN bit patterns but
-        # NA uses a distinct payload that only isNA detects correctly.
-        result[gt.SpecialValues.isNA(arr)]     = "NA"
-        result[gt.SpecialValues.isUndef(arr)]  = "Undef"
-        result[gt.SpecialValues.isPosInf(arr)] = "Inf"
-        result[gt.SpecialValues.isNegInf(arr)] = "-Inf"
-        result[gt.SpecialValues.isEps(arr)]    = "Eps"
-
+        if not (np.isnan(arr).any() or np.isinf(arr).any()):
+            continue  # fast path: no JSON-breaking values in this column
+        result = arr.astype(object)
+        result[np.isposinf(arr)] = "Inf"
+        result[np.isneginf(arr)] = "-Inf"
+        result[np.isnan(arr)]    = "NA"   # covers both NA and Undef NaN payloads
         df[col] = result
 
     return df
@@ -74,7 +64,7 @@ class GdxReader:
             )
         kwargs = {"system_directory": sysdir} if sysdir else {}
         self.container = gt.Container(gdx_path, **kwargs)
-        self.gt = gt
+        self.gt = gt  # kept for index(); not used in sanitize
 
     def index(self) -> dict:
         """Return a dict mapping category → list of symbol names + descriptions."""
@@ -118,7 +108,7 @@ class GdxReader:
         total   = len(df)
         start   = (page - 1) * rows
         end     = min(start + rows, total)
-        slice_df = sanitize_dataframe(df.iloc[start:end], gt)
+        slice_df = sanitize_dataframe(df.iloc[start:end])
 
         return {
             "name":        name,
