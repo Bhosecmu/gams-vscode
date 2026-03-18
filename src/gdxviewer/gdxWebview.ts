@@ -219,7 +219,8 @@ export function getGdxWebviewContent(_webview: vscode.Webview): string {
   let currentPage = 1;
   let totalRecords = 0;
   let rows = 100;
-  let pendingResolve = null;
+  // Map from symbolName → { resolve, reject, timerId }
+  const pendingRequests = new Map();
 
   // ── Elements ───────────────────────────────────────────────
   const searchEl     = document.getElementById('search');
@@ -255,9 +256,16 @@ export function getGdxWebviewContent(_webview: vscode.Webview): string {
         renderTree('');
         setStatus(null);
         break;
-      case 'symbolData':
-        if (pendingResolve) { pendingResolve(msg.data); pendingResolve = null; }
+      case 'symbolData': {
+        const name = msg.data && msg.data.name;
+        if (name && pendingRequests.has(name)) {
+          const { resolve, timerId } = pendingRequests.get(name);
+          clearTimeout(timerId);
+          pendingRequests.delete(name);
+          resolve(msg.data);
+        }
         break;
+      }
       case 'loading':
         setStatus('<span class="spinner"></span> Loading GDX file…');
         break;
@@ -320,12 +328,15 @@ export function getGdxWebviewContent(_webview: vscode.Webview): string {
 
   async function loadSymbolPage() {
     if (!selectedSymbol) return;
+    const mySymbol = selectedSymbol;   // capture at call time
     setLoading(true);
     try {
-      const data = await requestSymbol(selectedSymbol, currentPage, rows);
+      const data = await requestSymbol(mySymbol, currentPage, rows);
+      if (mySymbol !== selectedSymbol) return;  // user navigated away; discard
       if (data.error) { setStatus('<span class="error">⚠ ' + escHtml(data.error) + '</span>'); return; }
       renderSymbol(data);
     } catch (err) {
+      if (mySymbol !== selectedSymbol) return;  // user navigated away; don't clobber new view
       setStatus('<span class="error">⚠ ' + escHtml(String(err)) + '</span>');
     } finally {
       setLoading(false);
@@ -333,12 +344,22 @@ export function getGdxWebviewContent(_webview: vscode.Webview): string {
   }
 
   function requestSymbol(name, page, rowCount) {
+    // Cancel any in-flight request for the same symbol (e.g. rapid page changes)
+    if (pendingRequests.has(name)) {
+      const old = pendingRequests.get(name);
+      clearTimeout(old.timerId);
+      old.reject(new Error('Superseded'));
+      pendingRequests.delete(name);
+    }
     return new Promise((resolve, reject) => {
-      pendingResolve = resolve;
-      vscode.postMessage({ command: 'getSymbol', symbolName: name, page, rows: rowCount });
-      setTimeout(() => {
-        if (pendingResolve) { pendingResolve = null; reject(new Error('Timeout waiting for symbol data')); }
+      const timerId = setTimeout(() => {
+        if (pendingRequests.has(name)) {
+          pendingRequests.delete(name);
+          reject(new Error('Timed out waiting for symbol data'));
+        }
       }, 30000);
+      pendingRequests.set(name, { resolve, reject, timerId });
+      vscode.postMessage({ command: 'getSymbol', symbolName: name, page, rows: rowCount });
     });
   }
 

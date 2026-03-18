@@ -23,10 +23,19 @@ export async function getPythonPath(): Promise<string> {
     return process.platform === 'win32' ? 'python' : 'python3';
 }
 
-/** Check whether gams-transfer is importable in the given Python. */
+/** Check whether gams-transfer is importable in the given Python (10 s timeout). */
 export function checkGamsTransfer(pythonPath: string): Promise<boolean> {
     return new Promise(resolve => {
         const proc = cp.spawn(pythonPath, ['-c', 'import gams.transfer']);
-        proc.on('close', code => resolve(code === 0));
+        let done = false;
+        const timer = setTimeout(() => {
+            if (!done) { done = true; proc.kill(); resolve(false); }
+        }, 10_000);
+        proc.on('close', code => {
+            if (!done) { done = true; clearTimeout(timer); resolve(code === 0); }
+        });
+        proc.on('error', () => {
+            if (!done) { done = true; clearTimeout(timer); resolve(false); }
+        });
     });
 }

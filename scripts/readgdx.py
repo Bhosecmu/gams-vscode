@@ -1,10 +1,6 @@
 """
 readgdx.py — Read a GDX file and output symbol data as JSON.
 
-Usage:
-  python readgdx.py <file.gdx>                   # output symbol index
-  python readgdx.py <file.gdx> --interactive      # stdin/stdout mode for symbol data
-
 Requires: gams-transfer  (pip install gams-transfer)
           Either GAMS installed (gams in PATH) or gamspy_base package.
 """
@@ -27,27 +23,62 @@ def find_gams_sysdir() -> str | None:
     return None
 
 
-def sanitize_dataframe(df):
-    """Minimal sanitization: only fix values that would break JSON serialization.
+class _NumpyEncoder(json.JSONEncoder):
+    """Fallback encoder so numpy scalars don't crash json.dumps on NumPy >= 2.0."""
+    def default(self, obj):
+        try:
+            import numpy as np
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+        except ImportError:
+            pass
+        return super().default(obj)
 
-    TODO: proper GAMS special value display (Inf/-Inf/Eps/NA/Undef) to be
-    revisited once the exact gams.transfer representation on this system
-    is confirmed (raw GMS_SV floats vs Python-mapped float/NaN/etc.).
-    """
+
+def _sanitize_value(v):
+    """Convert a single value to something json.dumps(allow_nan=False) accepts."""
+    import math, numpy as np
+    if isinstance(v, float):
+        if math.isnan(v):   return "NA"
+        if math.isinf(v):   return "Inf" if v > 0 else "-Inf"
+        return v
+    if isinstance(v, np.floating):
+        f = float(v)
+        if math.isnan(f):   return "NA"
+        if math.isinf(f):   return "Inf" if f > 0 else "-Inf"
+        return f
+    if isinstance(v, np.integer):
+        return int(v)
+    return v
+
+
+def sanitize_dataframe(df):
+    """Replace NaN/Inf/special-float with JSON-safe strings so that
+    json.dumps(allow_nan=False) never raises on the result."""
     import numpy as np
 
     df = df.copy()
-    float_cols = df.select_dtypes(include=["float"]).columns
 
-    for col in float_cols:
-        arr = df[col].to_numpy()
-        if not (np.isnan(arr).any() or np.isinf(arr).any()):
-            continue  # fast path: no JSON-breaking values in this column
-        result = arr.astype(object)
-        result[np.isposinf(arr)] = "Inf"
-        result[np.isneginf(arr)] = "-Inf"
-        result[np.isnan(arr)]    = "NA"   # covers both NA and Undef NaN payloads
-        df[col] = result
+    for col in df.columns:
+        kind = df[col].dtype.kind
+        if kind == 'f':
+            # Fast vectorised path for float columns
+            arr = df[col].to_numpy()
+            if np.isnan(arr).any() or np.isinf(arr).any():
+                result = arr.astype(object)
+                result[np.isposinf(arr)] = "Inf"
+                result[np.isneginf(arr)] = "-Inf"
+                result[np.isnan(arr)]    = "NA"
+                df[col] = result
+            else:
+                df[col] = arr.tolist()
+        elif kind == 'O':
+            # Object columns may contain float NaN (gams.transfer mixed types)
+            df[col] = [_sanitize_value(v) for v in df[col]]
 
     return df
 
@@ -64,7 +95,7 @@ class GdxReader:
             )
         kwargs = {"system_directory": sysdir} if sysdir else {}
         self.container = gt.Container(gdx_path, **kwargs)
-        self.gt = gt  # kept for index(); not used in sanitize
+        self.gt = gt
 
     def index(self) -> dict:
         """Return a dict mapping category → list of symbol names + descriptions."""
@@ -78,21 +109,22 @@ class GdxReader:
         }
         for name, sym in self.container.data.items():
             entry = {"name": name, "description": getattr(sym, "description", "") or ""}
+            # Check most-specific types first: Variable and Equation are subclasses
+            # of Parameter in gams.transfer, so they must be tested before Parameter.
             if isinstance(sym, gt.Alias):
                 categories["Aliases"].append(entry)
             elif isinstance(sym, gt.Set):
                 categories["Sets"].append(entry)
-            elif isinstance(sym, gt.Parameter):
-                categories["Parameters"].append(entry)
             elif isinstance(sym, gt.Variable):
                 categories["Variables"].append(entry)
             elif isinstance(sym, gt.Equation):
                 categories["Equations"].append(entry)
+            elif isinstance(sym, gt.Parameter):
+                categories["Parameters"].append(entry)
         return categories
 
     def symbol_data(self, name: str, page: int, rows: int) -> dict:
         """Return paginated records for a symbol."""
-        gt  = self.gt
         sym = self.container[name]
         description = getattr(sym, "description", "") or ""
 
@@ -105,9 +137,9 @@ class GdxReader:
             return {"name": name, "description": description,
                     "columns": [], "records": [], "total": 0, "page": page, "rows": rows}
 
-        total   = len(df)
-        start   = (page - 1) * rows
-        end     = min(start + rows, total)
+        total    = len(df)
+        start    = (page - 1) * rows
+        end      = min(start + rows, total)
         slice_df = sanitize_dataframe(df.iloc[start:end])
 
         return {
@@ -123,36 +155,48 @@ class GdxReader:
 
 def main():
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "Usage: readgdx.py <file.gdx> [--interactive]"}))
+        print(json.dumps({"command": "index", "error": "Usage: readgdx.py <file.gdx>"}))
         sys.exit(1)
 
-    gdx_path    = sys.argv[1]
-    interactive = "--interactive" in sys.argv
+    gdx_path = sys.argv[1]
 
     try:
         reader = GdxReader(gdx_path)
     except Exception as e:
-        print(json.dumps({"error": str(e)}), flush=True)
+        print(json.dumps({"command": "index", "error": str(e)}), flush=True)
         sys.exit(1)
 
-    if not interactive:
-        print(json.dumps(reader.index()), flush=True)
-        return
-
-    # Interactive mode: read JSON requests from stdin, write JSON responses to stdout
+    # Interactive mode: read JSON commands from stdin, write responses to stdout.
+    # Supported commands:
+    #   {"command": "index"}
+    #   {"command": "symbolData", "symbolName": "...", "page": 1, "rows": 100}
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
+        name = None
         try:
             req  = json.loads(line)
-            name = req["symbolName"]
-            page = int(req.get("page", 1))
-            rows = int(req.get("rows", 100))
-            result = reader.symbol_data(name, page, rows)
-            print(json.dumps(result), flush=True)
+            cmd  = req.get("command", "symbolData")
+
+            if cmd == "index":
+                data = reader.index()
+                print(json.dumps({"command": "index", "data": data},
+                                  cls=_NumpyEncoder, allow_nan=False), flush=True)
+            else:
+                name   = req["symbolName"]
+                page   = int(req.get("page", 1))
+                rows   = int(req.get("rows", 100))
+                result = reader.symbol_data(name, page, rows)
+                print(json.dumps(result, cls=_NumpyEncoder, allow_nan=False), flush=True)
         except Exception as e:
-            print(json.dumps({"error": str(e)}), flush=True)
+            try:
+                print(json.dumps({"error": str(e), "name": name,
+                                   "command": req.get("command", "symbolData") if 'req' in dir() else "symbolData"},
+                                  allow_nan=False), flush=True)
+            except Exception as e2:
+                print(json.dumps({"error": repr(e2), "name": name, "command": "symbolData"}),
+                      flush=True)
 
 
 if __name__ == "__main__":

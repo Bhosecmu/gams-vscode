@@ -7,9 +7,16 @@ import { getGdxWebviewContent } from './gdxWebview';
 export class GdxEditorProvider implements vscode.CustomReadonlyEditorProvider {
     public static readonly viewType = 'gams.gdxViewer';
 
+    /** One persistent Python process per open GDX file. */
     private interactiveProc: cp.ChildProcess | undefined;
     private interactiveUri: string | undefined;
+
+    /**
+     * Pending response callbacks keyed by symbol name, or '__index__' for the
+     * index request.
+     */
     private pendingCallbacks: Map<string, (data: unknown) => void> = new Map();
+    private lastRequestedSymbol: string | undefined;
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -37,7 +44,10 @@ export class GdxEditorProvider implements vscode.CustomReadonlyEditorProvider {
 
         // Watch for file changes
         const watcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(vscode.Uri.file(path.dirname(document.uri.fsPath)), path.basename(document.uri.fsPath))
+            new vscode.RelativePattern(
+                vscode.Uri.file(path.dirname(document.uri.fsPath)),
+                path.basename(document.uri.fsPath)
+            )
         );
         watcher.onDidChange(() => this.reload(document.uri, webviewPanel));
         webviewPanel.onDidDispose(() => {
@@ -49,11 +59,8 @@ export class GdxEditorProvider implements vscode.CustomReadonlyEditorProvider {
         webviewPanel.webview.onDidReceiveMessage(async (msg) => {
             if (msg.command === 'getSymbol') {
                 await this.fetchSymbolData(
-                    document.uri,
-                    webviewPanel,
-                    msg.symbolName,
-                    msg.page,
-                    msg.rows
+                    document.uri, webviewPanel,
+                    msg.symbolName, msg.page, msg.rows
                 );
             }
         });
@@ -61,10 +68,21 @@ export class GdxEditorProvider implements vscode.CustomReadonlyEditorProvider {
         await this.loadIndex(document.uri, webviewPanel);
     }
 
-    // ── Index loading ───────────────────────────────────────────────────────────
+    // ── Single process management ───────────────────────────────────────────────
 
-    private async loadIndex(uri: vscode.Uri, panel: vscode.WebviewPanel): Promise<void> {
-        panel.webview.postMessage({ command: 'loading' });
+    /**
+     * Ensure the interactive Python process is running for this GDX file.
+     * Returns the process, or null if it could not be started.
+     */
+    private async ensureProcess(
+        uri: vscode.Uri,
+        panel: vscode.WebviewPanel
+    ): Promise<cp.ChildProcess | null> {
+        if (this.interactiveProc && this.interactiveUri === uri.fsPath) {
+            return this.interactiveProc;
+        }
+
+        this.killInteractive(this.interactiveUri);
 
         const python = await getPythonPath();
         const ok = await checkGamsTransfer(python);
@@ -76,39 +94,100 @@ export class GdxEditorProvider implements vscode.CustomReadonlyEditorProvider {
                     "Install it with:  pip install gams-transfer\n" +
                     "Then reload the file.",
             });
-            return;
+            return null;
         }
 
         const script = path.join(this.context.extensionPath, 'scripts', 'readgdx.py');
-        const proc = cp.spawn(python, [script, uri.fsPath]);
+        const proc   = cp.spawn(python, [script, uri.fsPath]);
+        this.interactiveProc = proc;
+        this.interactiveUri  = uri.fsPath;
 
-        let stdout = '';
-        let stderr = '';
-        proc.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
-        proc.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+        // Route stdout lines to waiting callbacks
+        let buffer = '';
+        proc.stdout.on('data', (d: Buffer) => {
+            buffer += d.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+            for (const line of lines) {
+                if (!line.trim()) { continue; }
+                try {
+                    const data = JSON.parse(line) as Record<string, unknown>;
+                    const key  = data['command'] === 'index'
+                        ? '__index__'
+                        : (data['name'] as string | undefined) ?? this.lastRequestedSymbol ?? '';
+                    const cb = this.pendingCallbacks.get(key);
+                    if (cb) { this.pendingCallbacks.delete(key); cb(data); }
+                } catch {
+                    // ignore malformed / partial lines
+                }
+            }
+        });
+
+        let stderrBuf = '';
+        proc.stderr.on('data', (d: Buffer) => { stderrBuf += d.toString(); });
+
+        proc.on('error', (err) => {
+            const errorMsg = `Failed to start Python: ${err.message}`;
+            for (const [key, cb] of this.pendingCallbacks) {
+                this.pendingCallbacks.delete(key);
+                cb(key === '__index__'
+                    ? { command: 'index', error: errorMsg }
+                    : { name: key, error: errorMsg });
+            }
+        });
 
         proc.on('close', (code) => {
-            if (code !== 0) {
-                panel.webview.postMessage({
-                    command: 'error',
-                    message: stderr || `Python process exited with code ${code}`,
-                });
-                return;
+            // Resolve every pending callback with an error so no request hangs forever
+            const errorMsg = stderrBuf || `Python process exited with code ${code}`;
+            for (const [key, cb] of this.pendingCallbacks) {
+                this.pendingCallbacks.delete(key);
+                cb(key === '__index__'
+                    ? { command: 'index', error: errorMsg }
+                    : { name: key, error: errorMsg });
             }
-            try {
-                const index = JSON.parse(stdout.trim());
-                if (index.error) {
-                    panel.webview.postMessage({ command: 'error', message: index.error });
+            this.interactiveProc = undefined;
+            this.interactiveUri  = undefined;
+        });
+
+        return proc;
+    }
+
+    // ── Index loading ───────────────────────────────────────────────────────────
+
+    private async loadIndex(uri: vscode.Uri, panel: vscode.WebviewPanel): Promise<void> {
+        panel.webview.postMessage({ command: 'loading' });
+
+        const proc = await this.ensureProcess(uri, panel);
+        if (!proc) { return; }
+
+        await new Promise<void>((resolve) => {
+            this.pendingCallbacks.set('__index__', (data: unknown) => {
+                const d = data as Record<string, unknown>;
+                if (d['error']) {
+                    panel.webview.postMessage({ command: 'error', message: d['error'] });
                 } else {
-                    panel.webview.postMessage({ command: 'initialize', data: index });
+                    panel.webview.postMessage({ command: 'initialize', data: d['data'] });
                 }
-            } catch {
-                panel.webview.postMessage({ command: 'error', message: 'Failed to parse GDX index.' });
-            }
+                resolve();
+            });
+
+            proc.stdin!.write(JSON.stringify({ command: 'index' }) + '\n');
+
+            // Large GDX files can take a long time to load — allow 3 minutes
+            setTimeout(() => {
+                if (this.pendingCallbacks.has('__index__')) {
+                    this.pendingCallbacks.delete('__index__');
+                    panel.webview.postMessage({
+                        command: 'error',
+                        message: 'Timed out loading GDX index. The file may be too large or gams-transfer may be unavailable.',
+                    });
+                    resolve();
+                }
+            }, 180_000);
         });
     }
 
-    // ── Symbol data fetching (interactive process) ──────────────────────────────
+    // ── Symbol data fetching ────────────────────────────────────────────────────
 
     private async fetchSymbolData(
         uri: vscode.Uri,
@@ -117,53 +196,29 @@ export class GdxEditorProvider implements vscode.CustomReadonlyEditorProvider {
         page: number,
         rows: number
     ): Promise<void> {
-        const python = await getPythonPath();
-        const script = path.join(this.context.extensionPath, 'scripts', 'readgdx.py');
-
-        // (Re)start the interactive process if needed
-        if (!this.interactiveProc || this.interactiveUri !== uri.fsPath) {
-            this.killInteractive(this.interactiveUri);
-            const proc = cp.spawn(python, [script, uri.fsPath, '--interactive']);
-            this.interactiveProc = proc;
-            this.interactiveUri = uri.fsPath;
-
-            let buffer = '';
-            proc.stdout.on('data', (d: Buffer) => {
-                buffer += d.toString();
-                const lines = buffer.split('\n');
-                buffer = lines.pop() ?? '';   // keep incomplete line
-                for (const line of lines) {
-                    if (!line.trim()) { continue; }
-                    try {
-                        const data = JSON.parse(line.trim());
-                        // Route response to the waiting callback for this symbol
-                        const cb = this.pendingCallbacks.get(data.name ?? symbolName);
-                        if (cb) {
-                            this.pendingCallbacks.delete(data.name ?? symbolName);
-                            cb(data);
-                        }
-                    } catch {
-                        // ignore parse errors from partial lines
-                    }
-                }
+        // The process should already be running (started by loadIndex).
+        // If it died, surface a friendly error rather than re-loading the whole file.
+        const proc = this.interactiveProc;
+        if (!proc || this.interactiveUri !== uri.fsPath) {
+            panel.webview.postMessage({
+                command: 'symbolData',
+                data: { name: symbolName, error: 'GDX process is not running. Close and reopen the file.' },
             });
-
-            proc.on('close', () => {
-                this.interactiveProc = undefined;
-                this.interactiveUri = undefined;
-            });
+            return;
         }
 
-        // Register callback then write request
+        this.lastRequestedSymbol = symbolName;
+
         await new Promise<void>((resolve) => {
             this.pendingCallbacks.set(symbolName, (data) => {
                 panel.webview.postMessage({ command: 'symbolData', data });
                 resolve();
             });
-            this.interactiveProc!.stdin!.write(
-                JSON.stringify({ symbolName, page, rows }) + '\n'
+
+            proc.stdin!.write(
+                JSON.stringify({ command: 'symbolData', symbolName, page, rows }) + '\n'
             );
-            // Timeout guard
+
             setTimeout(() => {
                 if (this.pendingCallbacks.has(symbolName)) {
                     this.pendingCallbacks.delete(symbolName);
@@ -173,7 +228,7 @@ export class GdxEditorProvider implements vscode.CustomReadonlyEditorProvider {
                     });
                     resolve();
                 }
-            }, 30_000);
+            }, 60_000);
         });
     }
 
@@ -181,7 +236,7 @@ export class GdxEditorProvider implements vscode.CustomReadonlyEditorProvider {
         if (this.interactiveProc && this.interactiveUri === filePath) {
             this.interactiveProc.kill();
             this.interactiveProc = undefined;
-            this.interactiveUri = undefined;
+            this.interactiveUri  = undefined;
             this.pendingCallbacks.clear();
         }
     }

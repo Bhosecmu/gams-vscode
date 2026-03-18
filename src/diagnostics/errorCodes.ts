@@ -1,0 +1,56 @@
+export interface ErrorInfo {
+    message: string;
+    hint: string;
+}
+
+/** Most common GAMS compilation error codes with fix hints. */
+export const ERROR_DB: Record<number, ErrorInfo> = {
+    8:   { message: 'Closing parenthesis, bracket, or brace expected',
+           hint: 'Check for unmatched ( ) [ ] { } in this expression' },
+    36:  { message: 'The .. operator is missing in the equation definition',
+           hint: 'Equation syntax: equname(sets)..  lhs =e= rhs ;' },
+    37:  { message: 'Equation type is missing (=E=, =L=, =G=, =N=)',
+           hint: 'Add a relational operator:  =e=  =l=  =g=  =n=' },
+    51:  { message: 'Endogenous variable found in a linear model',
+           hint: 'Change model type from LP to NLP, or linearise the expression' },
+    54:  { message: 'Exponentiation of endogenous variables not allowed in LP',
+           hint: 'Change model type to NLP' },
+    71:  { message: 'Equation declared but never defined',
+           hint: 'Add a definition:  equname(sets)..  lhs =e= rhs ;' },
+    96:  { message: 'Statement not terminated by semicolon',
+           hint: 'Add ;  at the end of the previous statement' },
+    97:  { message: 'Statement not terminated by semicolon',
+           hint: 'Add ;  at the end of the previous statement' },
+    120: { message: 'Unknown set or element name',
+           hint: 'Check spelling; ensure the set is declared before use' },
+    125: { message: 'Set was already controlled; cannot be controlled again',
+           hint: 'Remove the duplicate loop or conditional that controls this set' },
+    140: { message: 'Unknown symbol — identifier not declared',
+           hint: 'Declare it before use with Set, Parameter, Variable, Equation, etc.' },
+    141: { message: 'Identifier declared but never assigned a value',
+           hint: 'Assign values in the declaration block or with an assignment statement' },
+    148: { message: 'Wrong number of indices (dimension mismatch)',
+           hint: 'Check the declared dimension of this identifier vs. how you are indexing it' },
+    149: { message: 'Uncontrolled set used as index',
+           hint: 'Use this set inside a sum(), loop, or other control construct' },
+    170: { message: 'Set element not found in its domain',
+           hint: 'Check the spelling of the element against the domain set definition' },
+    171: { message: 'Domain violation — index is not in the declared domain',
+           hint: 'Ensure the index set is a subset of the declared domain' },
+    172: { message: 'Element is redefined (duplicate set element)',
+           hint: 'Remove the duplicate element from the set' },
+    195: { message: 'Identifier redeclared with a different type',
+           hint: 'Use a different name, or remove the conflicting earlier declaration' },
+    198: { message: 'ord() used on a set that has no ordering',
+           hint: 'ord() only works on statically ordered sets, not on dynamic subsets' },
+    256: { message: 'Model specification error',
+           hint: 'Check the model statement syntax:  model name / all /  or  / eq1, eq2 … /' },
+    257: { message: 'Solver not checked — consequential error from previous errors',
+           hint: 'Fix the earlier errors first; this one will disappear automatically' },
+    340: { message: 'Missing quotes around a string element',
+           hint: 'Wrap the string in single or double quotes' },
+    408: { message: 'Surplus closing parenthesis, bracket, or brace',
+           hint: 'Remove the extra ) ] } — check for mismatched brackets' },
+};
+
+export const GAMS_ERRORS_DOC = 'https://gams.com/latest/docs/UG_FixingErrors.html';

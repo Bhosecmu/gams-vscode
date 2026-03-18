@@ -4,6 +4,7 @@ import { RefEditorProvider } from './gdxviewer/refEditorProvider';
 import { GamsRunner, RunResult } from './runner/gamsRunner';
 import { GamsStatusBarItem } from './runner/statusBarItem';
 import { pickArgs, getLastArgs, saveLastArgs } from './runner/argsManager';
+import { GamsDiagnosticsProvider } from './diagnostics/gamsDiagnostics';
 
 export function activate(context: vscode.ExtensionContext) {
 
@@ -16,12 +17,19 @@ export function activate(context: vscode.ExtensionContext) {
     // ── Phase 3: Run button ───────────────────────────────────────────────────
     const outputChannel = vscode.window.createOutputChannel('GAMS');
     const statusBar     = new GamsStatusBarItem();
+    const diagnostics   = new GamsDiagnosticsProvider();
     const runner        = new GamsRunner(outputChannel, (state, result?: RunResult) => {
         statusBar.setState(state, result?.exitCode);
-        // Phase 4 hook: pass result to diagnostics when ready
+        if (result) {
+            const editor = vscode.window.activeTextEditor;
+            const gmsPath = editor?.document.uri.fsPath ?? '';
+            if (gmsPath) {
+                diagnostics.update(gmsPath, result.lstFile, result.logFile);
+            }
+        }
     });
 
-    context.subscriptions.push(outputChannel, statusBar, runner);
+    context.subscriptions.push(outputChannel, statusBar, diagnostics, runner);
 
     // Show/hide status bar based on active editor
     const updateStatusBarVisibility = (editor?: vscode.TextEditor) => {
@@ -83,8 +91,14 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // ── Phase 4: Error diagnostics — placeholder ──────────────────────────────
-    // TODO: parse log/lst, surface diagnostics, suggest fixes
+    // Clear diagnostics when a GAMS file is saved (will be re-populated on next run)
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument(doc => {
+            if (doc.languageId === 'gams') {
+                diagnostics.clear();
+            }
+        })
+    );
 }
 
 export function deactivate() {}
